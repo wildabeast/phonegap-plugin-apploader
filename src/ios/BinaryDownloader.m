@@ -63,14 +63,10 @@
 
 @synthesize downloadQueue, activeDownloads;
 
--(CDVPlugin*) initWithWebView:(UIWebView*)theWebView
-{
-    self = (BinaryDownloader*)[super initWithWebView:(UIWebView*)theWebView];
-    if (self) {
-		self.downloadQueue = [[[NSMutableArray alloc] init] autorelease];
-        self.activeDownloads = [NSMutableDictionary dictionaryWithCapacity:2];
-    }
-	return self;
+
+- (void) pluginInitialize {
+    self.downloadQueue = [[[NSMutableArray alloc] init] autorelease];
+    self.activeDownloads = [NSMutableDictionary dictionaryWithCapacity:2];
 }
 
 - (void) next:(NSString*)currentUrlDownload delegate:(id<FileDownloadURLConnectionDelegate>)delegate
@@ -85,8 +81,8 @@
 	{
 		if ([self.downloadQueue count] > 0) 
 		{
-			[self.downloadQueue dequeue]; // dequeue current
-			DownloadQueueItem* queueItem = [self.downloadQueue queueHead]; // get next
+			[self.downloadQueue cdv_dequeue]; // dequeue current
+			DownloadQueueItem* queueItem = [self.downloadQueue cdv_queueHead]; // get next
 			if (queueItem != nil) {
 				[self download:queueItem delegate:delegate];
 			}
@@ -122,14 +118,14 @@
 	if (cancelled) 
 	{
 		NSString* successString = [NSString stringWithFormat:@"Download '%@' successfully cancelled.", uri];
-		CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:successString];
-		[super writeJavascript:[pluginResult toSuccessCallbackString:callbackId]];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:successString];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
 	}
 	else
 	{
 		NSString* errorString = [NSString stringWithFormat:@"Download '%@' not found as an active download.", uri];
-		CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-		[super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
 	}
 }
 
@@ -140,13 +136,13 @@
 		// check whether queueItem already exists in queue
 		NSUInteger index = [self.downloadQueue indexOfObject:queueItem];
 		if (index == NSNotFound) {
-			[self.downloadQueue enqueue:queueItem];
+            [self.downloadQueue cdv_enqueue:queueItem];
 		}
 		//[queueItem release];
 		
 		if ([self.downloadQueue count] == 1) 
 		{
-			DownloadQueueItem* item = [self.downloadQueue queueHead]; // don't dequeue - we do it only after error or download finished
+			DownloadQueueItem* item = [self.downloadQueue cdv_queueHead]; // don't dequeue - we do it only after error or download finished
 			NSURL* url = [NSURL URLWithString:queueItem.uri];
 
 			if (url != nil)
@@ -219,8 +215,8 @@
 	{
 		if ([self.downloadQueue count] > 0) 
 		{
-			[self.downloadQueue dequeue]; // dequeue current
-			DownloadQueueItem* queueItem = [self.downloadQueue queueHead]; // get next
+			[self.downloadQueue cdv_dequeue]; // dequeue current
+			DownloadQueueItem* queueItem = [self.downloadQueue cdv_queueHead]; // get next
 			if (queueItem != nil) {
 				[self download:queueItem delegate:self];
 			}

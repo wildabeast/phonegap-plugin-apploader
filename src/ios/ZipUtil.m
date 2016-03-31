@@ -12,13 +12,8 @@
 
 @synthesize operationQueue;
 
--(CDVPlugin*) initWithWebView:(UIWebView*)theWebView
-{
-    self = (ZipUtil*)[super initWithWebView:(UIWebView*)theWebView];
-    if (self) {
-        self.operationQueue = [[[NSOperationQueue alloc] init] autorelease];
-    }
-	return self;
+-(void) pluginInitialize {
+    self.operationQueue = [[[NSOperationQueue alloc] init] autorelease];
 }
 
 #pragma mark -
@@ -59,7 +54,7 @@
 
 - (void) unzip:(NSMutableArray*)arguments withDict:(NSMutableDictionary*)options
 {
-	NSString* callbackId = [arguments pop];
+	NSString* callbackId = [arguments cdv_pop];
 	
 	NSString* sourcePath = [arguments objectAtIndex:0];
 	NSString* targetFolder = [arguments objectAtIndex:1];
@@ -75,7 +70,7 @@
 	{
 		NSString* errorString = [NSString stringWithFormat:@"Source path '%@' does not exist.", sourcePath];
 		CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-		[super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+		[self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
 	}
 }
 

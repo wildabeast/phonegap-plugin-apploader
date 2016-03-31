@@ -8,7 +8,6 @@
 #import "AppLoader.h"
 
 #import <Cordova/CDVCommandDelegate.h>
-#import <Cordova/CDVDebug.h>
 #import <Cordova/CDVViewController.h>
 
 #import "BinaryDownloader.h"
@@ -89,7 +88,7 @@ const float updateIncrement = 2.0f;
     [self removeStatusBarOverlay];
     
     NSURLRequest* homeRequest = [NSURLRequest requestWithURL:[self homeUrl] cachePolicy:NSURLRequestUseProtocolCachePolicy timeoutInterval:5.0];
-    [self.webView loadRequest:homeRequest];
+    [self.webViewEngine loadRequest:homeRequest];
     [[[[UIApplication sharedApplication] delegate] window] makeKeyAndVisible];
 }
 
@@ -222,11 +221,50 @@ const float updateIncrement = 2.0f;
 #pragma mark -
 #pragma mark PhoneGap commands
 
+- (void) initialize:(CDVInvokedUrlCommand*)command
+{
+    NSString* appId = [self getSavedGUID];
+    if (!appId) {
+        appId = [self newGUID];
+    }
+    
+    NSString* appURL = [self appUrl:appId];
+    
+    NSString* firstRun = @"true";
+    if ([[NSFileManager defaultManager] fileExistsAtPath:appURL]) {
+        firstRun = @"false";
+    }
+    
+    NSDictionary* jsDict = [NSDictionary dictionaryWithObjects:[NSArray arrayWithObjects:firstRun, nil]
+                                                       forKeys:[NSArray arrayWithObjects:@"firstRun", nil]];
+    
+    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:jsDict];
+    [pluginResult setKeepCallbackAsBool:FALSE];
+    
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    
+}
+
+- (NSString*) newGUID
+{
+    return [[NSUUID UUID] UUIDString];
+}
+
+- (void) saveGUID:(NSString*) guid
+{
+    [[NSUserDefaults standardUserDefaults] setObject:guid forKey:@"APP_ID"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+
+- (NSString*) getSavedGUID
+{
+    return [[NSUserDefaults standardUserDefaults] stringForKey:@"APP_ID"];
+}
+
 - (void) load:(CDVInvokedUrlCommand*)command
 {
-    NSString* callbackId = [command callbackId];
-    
-    NSString* appId = @"0";
+    NSString* appId = [self getSavedGUID];
     
     // ///////////////////////////////////////////  
     
@@ -237,15 +275,19 @@ const float updateIncrement = 2.0f;
     {
         [self showStatusBarOverlay];
         NSURL* url = [NSURL fileURLWithPath:appURL];
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(pageDidLoad:) name:CDVPageDidLoadNotification object:self.webView];
-        [self.webView loadRequest:([NSURLRequest requestWithURL:url])];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(pageDidLoad:) name:CDVPageDidLoadNotification object:nil];
+        
+        // clear and disable cache
+        [[NSURLCache sharedURLCache] removeAllCachedResponses];
+        
+        [self.webViewEngine loadRequest:([NSURLRequest requestWithURL:url])];
         [[[[UIApplication sharedApplication] delegate] window] makeKeyAndVisible];
     } 
     else 
     {
         NSString* errorString = [NSString stringWithFormat:@"AppLoader app not found: %@", appURL];
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-        [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }   
 }
 
@@ -253,7 +295,7 @@ const float updateIncrement = 2.0f;
 {
     NSString* callbackId = [command callbackId];
     
-    NSString* appId = @"0";
+    NSString* appId = [self newGUID];
     NSString* uri = [command argumentAtIndex:0];
     nextUpdatePercent = updateIncrement;
     
@@ -270,7 +312,7 @@ const float updateIncrement = 2.0f;
         credential = [NSURLCredential credentialWithUser:username password:password persistence:NSURLCredentialPersistenceForSession];
     }
     
-    BinaryDownloader* bdPlugin = [[BinaryDownloader alloc] initWithWebView:self.webView];
+    BinaryDownloader* bdPlugin = [BinaryDownloader alloc];
     if (bdPlugin != nil)
     {
         // remove any previous existing download
@@ -280,20 +322,19 @@ const float updateIncrement = 2.0f;
         NSDictionary* context = [NSDictionary dictionaryWithObjects:[NSArray arrayWithObjects:appId, uri, callbackId, downloadFilePath, nil] 
                                                             forKeys:[NSArray arrayWithObjects:@"appId", @"uri", @"callbackId", @"filePath", nil]];
         DownloadQueueItem* queueItem = [[DownloadQueueItem newItem:uri withFilepath:downloadFilePath context:context andCredential:credential] autorelease];
+        [bdPlugin pluginInitialize];
         [bdPlugin download:queueItem delegate:self];
     }
     else 
     {
         NSString* errorString = [NSString stringWithFormat:@"Plugin '%@' not found.", BINARY_DOWNLOAD_PLUGIN];
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-        [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }
 }
 
 - (void) remove:(CDVInvokedUrlCommand*)command
 {
-    NSString* callbackId = [command callbackId];
-    
     NSString* appId = [command argumentAtIndex:0];
     CDVPluginResult* pluginResult = nil;
     
@@ -303,13 +344,12 @@ const float updateIncrement = 2.0f;
     if (error == nil)
     {
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
-        [super writeJavascript:[pluginResult toSuccessCallbackString:callbackId]];
     }
     else
     {
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]];
-        [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
     }
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
 
@@ -321,36 +361,26 @@ const float updateIncrement = 2.0f;
     NSString* callbackId = [theConnection.context objectForKey:@"callbackId"];
     NSString* urlKey = [theConnection.url description];
     
-    BinaryDownloader* bdPlugin = [[BinaryDownloader alloc] initWithWebView:self.webView];
+    BinaryDownloader* bdPlugin = [BinaryDownloader alloc];
+    [bdPlugin pluginInitialize];
     if (bdPlugin != nil) {
         [bdPlugin next:urlKey delegate:self];
     } else {
         NSString* errorString = [NSString stringWithFormat:@"Plugin '%@' not found.", BINARY_DOWNLOAD_PLUGIN];
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-        [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
+        return;
     }       
     
-    DLog(@"Failed to download '%@', error: %@", urlKey, [error localizedDescription]);
+    NSLog(@"Failed to download '%@', error: %@", urlKey, [error localizedDescription]);
     
     NSString* errorString = [NSString stringWithFormat:@"Failed to download (error: %@)", [error localizedDescription]];
     CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-    [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
 }
 
 - (void) connectionDidFinish:(FileDownloadURLConnection*)theConnection
-{   
-    NSString* urlKey = [theConnection.url description];
-    NSString* callbackId = [theConnection.context objectForKey:@"callbackId"];
-    
-    BinaryDownloader* bdPlugin = [[BinaryDownloader alloc] initWithWebView:self.webView];
-    if (bdPlugin != nil) {
-        [bdPlugin next:urlKey delegate:self];
-    } else {
-        NSString* errorString = [NSString stringWithFormat:@"Plugin '%@' not found.", BINARY_DOWNLOAD_PLUGIN];
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-        [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
-    }       
-    
+{
     [self __installApp:theConnection.filePath : theConnection.context];
 }
 
@@ -363,7 +393,7 @@ const float updateIncrement = 2.0f;
     
     if ([percent floatValue] >= nextUpdatePercent) {
         nextUpdatePercent += updateIncrement;
-        DLog(@"Download Progress: %llu of %@ (%.1f%%)", totalBytes, theConnection.contentLength, [percent doubleValue]);
+        NSLog(@"Download Progress: %llu of %@ (%.1f%%)", totalBytes, theConnection.contentLength, [percent doubleValue]);
     
         NSString* callbackId = [theConnection.context objectForKey:@"callbackId"];
      
@@ -371,7 +401,7 @@ const float updateIncrement = 2.0f;
     
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:jsDict];
         [pluginResult setKeepCallbackAsBool:TRUE];
-        [super writeJavascript:[pluginResult toSuccessCallbackString:callbackId]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
     }
 
 }
@@ -403,23 +433,24 @@ const float updateIncrement = 2.0f;
         [self copyDirectoryContents:result.target :appPath];
         
         if (error == nil) {
+            [self __removeApp:[self getSavedGUID]];
+            [self saveGUID:appId];
             NSDictionary* jsDict = [NSDictionary dictionaryWithObjects:[NSArray arrayWithObjects:@"complete", nil] 
                                                                forKeys:[NSArray arrayWithObjects:@"state", nil]];
 
             CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:jsDict];
             [pluginResult setKeepCallbackAsBool:FALSE];
-            [super writeJavascript:[pluginResult toSuccessCallbackString:callbackId]];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
         } else {
             pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]];
-            DLog(@"%@", [error localizedDescription]);
-            [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+            NSLog(@"%@", [error localizedDescription]);[self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
         }
         
     } else {
         NSString* errorString = [NSString stringWithFormat:@"Error when un-zipping downloaded file: %@", result.source];
-        DLog(@"%@", errorString);
+        NSLog(@"%@", errorString);
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-        [super writeJavascript:[pluginResult toErrorCallbackString:callbackId]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:callbackId];
     }
 }
 
@@ -469,7 +500,8 @@ const float updateIncrement = 2.0f;
     NSString* appId = @"0";
     NSString* unzipFolder = [self unzipTempFilePath:appId];
     
-    ZipUtil* zuPlugin = [[ZipUtil alloc] initWithWebView:self.webView];
+    ZipUtil* zuPlugin = [ZipUtil alloc];
+    [zuPlugin pluginInitialize];
     if (zuPlugin != nil)
     {
         ZipOperation* zipOp = [[ZipOperation alloc] initAsDeflate:NO withSource:filePath target:unzipFolder andContext:context];
@@ -481,7 +513,7 @@ const float updateIncrement = 2.0f;
     {
         NSString* errorString = [NSString stringWithFormat:@"Plugin '%@' not found.", ZIP_UTIL_PLUGIN];
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorString];
-        [super writeJavascript:[pluginResult toErrorCallbackString:[context objectForKey:@"callbackId"]]];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:[context objectForKey:@"callbackId"]];
     }
 }
 
@@ -536,7 +568,7 @@ const float updateIncrement = 2.0f;
 {
     // Michael Brooks' homepage.js (https://github.com/phonegap/connect-phonegap/blob/master/res/middleware/homepage.js)
     NSString* tapScript = @"javascript: console.log('adding homepage.js'); (function(){var e={},t={touchstart:'touchstart',touchend:'touchend'};if(window.navigator.msPointerEnabled){t={touchstart:'MSPointerDown',touchend:'MSPointerUp'}}document.addEventListener(t.touchstart,function(t){var n=t.touches||[t],r;for(var i=0,s=n.length;i<s;i++){r=n[i];e[r.identifier||r.pointerId]=r}},false);document.addEventListener(t.touchend,function(t){var n=Object.keys(e).length;e={};if(n===3){t.preventDefault();window.history.back(window.history.length)}},false)})(window)";
-    [super writeJavascript:tapScript];
+    [self.commandDelegate evalJs:tapScript];
 }
 
 
